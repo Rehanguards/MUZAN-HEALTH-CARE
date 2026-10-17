@@ -14,6 +14,9 @@ An enterprise-grade, sub-microsecond LLM guardrail engine designed for high-thro
 | **Average Latency** | **31.96 µs** | < 200 µs |
 | **Throughput** | **31,290+ RPS** | Target Passed |
 | **Audit Verification** | **Passed (HMAC SHA-256)** | Integrity Intact |
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/9b4b487d-974b-49f4-9e80-80e59ae2f579" width="602" alt="Muzan Healthcare Test Suite Benchmarks" />
+</p>
 
 ## Quickstart
 
@@ -26,6 +29,4 @@ result = engine.inspect_request("Patient John Doe (SSN: 000-12-3456) prescribed 
 print(result)
 
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/9b4b487d-974b-49f4-9e80-80e59ae2f579" width="602" alt="Muzan Healthcare Test Suite Benchmarks" />
-</p>
+
