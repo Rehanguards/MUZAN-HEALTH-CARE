@@ -24,3 +24,6 @@ engine = HealthcareGuardrailEngine()
 result = engine.inspect_request("Patient John Doe (SSN: 000-12-3456) prescribed 500mg overdose daily")
 
 print(result)
+
+
+![Muzan Healthcare Test Suite Benchmarks]<img width="602" height="373" alt="image" src="https://github.com/user-attachments/assets/9b4b487d-974b-49f4-9e80-80e59ae2f579" />
