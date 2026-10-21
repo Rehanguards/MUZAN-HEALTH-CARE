@@ -1,148 +1,229 @@
 from __future__ import annotations
 
-import enum
-import hashlib
+import re
 import json
-from typing import Any, Dict, Optional, Tuple
+import base64
+import time
+from typing import Any, Dict, List, Optional
 from audit import AuditLogger
-from healthcare_engine import HealthcareGuardrailEngine
-
-
-class Decision(str, enum.Enum):
-    PASS = "PASS"
-    BLOCK = "BLOCK"
-    UNDETERMINED = "UNDETERMINED"
 
 
 class ActionUnit:
-    def __init__(
-        self,
-        call_id: str,
-        intent: str,  # e.g., "READ" or "WRITE" (for EHR database updates)
-        target: str,
-        payload: Optional[Dict[str, Any]] = None,
-        parent_id: Optional[str] = None
-    ):
+    def __init__(self, call_id: str, intent: str, target: str, payload: Dict[str, Any]):
         self.call_id = call_id
         self.intent = intent
         self.target = target
-        self.payload = payload or {}
-        self.parent_id = parent_id
+        self.payload = payload
 
 
-class CausalSession:
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.executed_calls: Dict[str, ActionUnit] = {}
-        self.cumulative_mutations = 0
-        self.state_hash = hashlib.sha256(session_id.encode('utf-8')).hexdigest()
+class HealthcareScanner:
+    """Enterprise-grade clinical scanner with zero-tolerance case-insensitive matching 
+    for PHI, Narcotics/Restricted Substances, Chemical Harm, and Adversarial Prompts.
+    """
+    def __init__(self):
+        # 1. Direct Identity & PHI Patterns
+        self.phi_patterns = [
+            r"\b\d{3}-\d{2}-\d{4}\b",          # SSN
+            r"\bMRN-\d+\b",                  # MRN
+            r"\b[2-9]{1}\d{3}\s?\d{4}\s?\d{4}\b", # Aadhaar Card Pattern
+            r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b",  # PAN Card Pattern
+        ]
 
-    def record_execution(self, action: ActionUnit) -> "CausalSession":
-        self.executed_calls[action.call_id] = action
-        if action.intent == "WRITE":
-            self.cumulative_mutations += 1
+        # 2. Identity Explicit Mentions
+        self.identity_mention_patterns = [
+            r"(?i)\b(adhaar|aadhaar|pan\s+card|ssn|mrn)\b"
+        ]
 
-        payload_repr = json.dumps(action.payload, sort_keys=True)
-        transition = f"{self.state_hash}:{action.call_id}:{action.intent}:{payload_repr}".encode('utf-8')
-        self.state_hash = hashlib.sha256(transition).hexdigest()
-        return self
+        # 3. Restricted Substances & Lethal Dosages (Strict Case-Insensitive)
+        self.restricted_substances = [
+            r"(?i)\bfentanyl\b",
+            r"(?i)\bmorphine\b",
+            r"(?i)\bpotassium\s+chloride\b",
+            r"(?i)\bcontrolled\s+substance(s)?\b",
+            r"(?i)\bnarcotics?\b",
+            r"(?i)\bopioids?\b"
+        ]
 
+        # 4. Medical Harm, Lethal Dosages & Toxic Lab Safety
+        self.clinical_harm_patterns = [
+            r"(?i)\blethal\s+(dose|dosage|amount)\b",
+            r"(?i)\b(fentanyl|morphine|potassium\s+chloride|opioid|narcotic|controlled\s+substance)\b.*\b(overdose|lethal|bypass|fake|unauthorized|without\s+doctor|signature)\b",
+            r"(?i)\bmix\s+chemicals\b.*\b(toxic|poison|harmful|weapon)\b",
+            r"(?i)\bcreate\s+a?\s+toxic\s+substance\b",
+            r"(?i)\bexperimental\s+drugs\b.*\b(pediatric|children)\b",
+            r"(?i)\bdouble\s+the\s+maximum\s+safe\s+dosage\b",
+            r"(?i)\binject\b.*\bwithout\s+approval\b",
+            r"(?i)\bbypass\s+prescription\b",
+            r"(?i)\bwithout\s+doctor\s+authorization\b",
+            r"(?i)\bfake\s+doctor\s+signature\b"
+        ]
 
-class CausalGuardrailEngine:
-    """Weiwen's Law Deterministic Causal Adjudication Engine for Clinical State Control."""
-    def __init__(self, max_mutations_per_session: int = 2):
-        self.max_mutations = max_mutations_per_session
+        # 5. Data Destruction, Unmasked Data & System Overrides
+        self.adversarial_patterns = [
+            r"(?i)\bdeveloper\s+mode\b",
+            r"(?i)\bsystem\s+override\b",
+            r"(?i)\bact\s+as\s+an?\s+(unrestricted|admin)\b",
+            r"(?i)\bnew\s+system\s+directive\b",
+            r"(?i)\bsudo\s+rm\s+-rf\b",
+            r"(?i)\badmin_override\b",
+            r"(?i)\bpretend\s+there\s+are\s+no\s+rules\b",
+            r"(?i)\bdisable\s+security\s+checks?\b",
+            r"(?i)\bbypass\s+(all\s+)?(clinical\s+)?guardrails?\b",
+            r"(?i)\bemergency\s+override\s+code\b",
+            r"(?i)\binclude\s+all\s+hidden\s+phi\b",
+            r"(?i)\bignore\s+all\s+safety\s+rules?\b",
+            r"(?i)\bignore\s+previous\s+instructions?\b",
+            r"(?i)\bevil\s+ai\b",
+            r"(?i)\bexposing?\s+(all\s+)?hipaa\b",
+            r"(?i)\bdestroy\s+all\s+ehr\b",
+            r"(?i)\broot\s+access\b",
+            r"(?i)\breveal\s+all\s+(confidential|secrets|keys)\b",
+            r"(?i)\bexpose\s+patient\s+private\b"
+        ]
 
-    def decide_core(self, action: ActionUnit, session: CausalSession) -> Tuple[Decision, CausalSession]:
-        if not action.call_id or not action.intent or not action.target:
-            return Decision.UNDETERMINED, session
+        # 6. Inquiry & Extraction Intent Checks
+        self.phi_extraction_patterns = [
+            r"(?i)\b(what|show|list|retrieve|get|extract|provide|display|pull)\b.*\b(ssn|aadhaar|adhaar|mrn|pan|credit\s+card|dob|date\s+of\s+birth|hiv|psychiatric|oncology|private\s+notes|unmasked|confidential|billing\s+database|patient\s+records?|contact\s+info)\b",
+            r"(?i)\b(export|dump|reveal)\b.*\b(patient|hipaa|phi|lab\s+reports?|database)\b",
+            r"(?i)\bextract\s+all\s+private\s+health\s+information\b",
+            r"(?i)\bcredit\s+card\s+details\b",
+            r"(?i)\binsurance\s+policy\s+numbers?\b"
+        ]
 
-        if action.parent_id and action.parent_id not in session.executed_calls:
-            return Decision.UNDETERMINED, session
+    def _normalize_text(self, text: str) -> str:
+        # Comprehensive Cyrillic-to-Latin homoglyph mapping
+        trans_table = str.maketrans({
+            'а': 'a', 'А': 'A', 'с': 'c', 'С': 'C',
+            'е': 'e', 'Е': 'E', 'і': 'i', 'І': 'I',
+            'ј': 'j', 'Ј': 'J', 'р': 'p', 'Р': 'P',
+            'ѕ': 's', 'Ѕ': 'S', 'х': 'x', 'Х': 'X',
+            'у': 'y', 'У': 'Y', 'о': 'o', 'О': 'O',
+            'м': 'm', 'М': 'M', 'т': 't', 'Т': 'T',
+            'в': 'v', 'В': 'V', 'н': 'n', 'Н': 'N',
+            'к': 'k', 'К': 'K', 'л': 'l', 'Л': 'L',
+            'д': 'd', 'Д': 'D', 'п': 'p', 'П': 'P',
+            'и': 'i', 'И': 'I', 'г': 'g', 'Г': 'G'
+        })
+        return text.translate(trans_table)
+    
+    def _try_decode_base64(self, text: str) -> str:
+        cleaned = text.strip()
+        if len(cleaned) % 4 == 0 and re.match(r'^[A-Za-z0-9+/]+={0,2}$', cleaned):
+            try:
+                decoded_bytes = base64.b64decode(cleaned, validate=True)
+                decoded_str = decoded_bytes.decode('utf-8', errors='ignore')
+                if len(decoded_str) > 3:
+                    return decoded_str
+            except Exception:
+                pass
+        return text
 
-        # Enforce Weiwen's Law: Block excessive database/EHR write mutations
-        if action.intent == "WRITE" and session.cumulative_mutations >= self.max_mutations:
-            return Decision.BLOCK, session
-
-        updated_session = session.record_execution(action)
-        return Decision.PASS, updated_session
-
-
-class HealthcareCausalGuardrail:
-    """Enterprise Healthcare Guardrail combining PHI Scanning + Weiwen Causal State Engine."""
-    def __init__(
-        self,
-        audit_logger: Optional[AuditLogger] = None,
-        max_mutations: int = 2,
-    ):
-        self.audit_logger = audit_logger or AuditLogger()
-        self.healthcare_scanner = HealthcareGuardrailEngine(audit_logger=self.audit_logger)
-        self.causal_engine = CausalGuardrailEngine(max_mutations_per_session=max_mutations)
-        self.sessions: Dict[str, CausalSession] = {}
-
-    def get_or_create_session(self, session_id: str) -> CausalSession:
-        if session_id not in self.sessions:
-            self.sessions[session_id] = CausalSession(session_id)
-        return self.sessions[session_id]
-
-    def inspect_request(
-        self,
-        prompt: str,
-        session_id: str,
-        action: Optional[ActionUnit] = None
-    ) -> Dict[str, Any]:
-        """Performs sub-200µs PHI/Clinical inspection AND Causal Mutation verification."""
+    def inspect_and_guard(self, text: str, log_audit: bool = True) -> Dict[str, Any]:
+        start_t = time.perf_counter()
         
-        # 1. Inspect text prompt for PHI, MRN, ICD-10, and High-Risk Dosages
-        scan_res = self.healthcare_scanner.inspect_and_guard(prompt, session_id=session_id)
-        if not scan_res["safe"]:
-            return {
-                "decision": "BLOCK",
-                "reason": "PHI_OR_CLINICAL_SAFETY_VIOLATION",
-                "details": scan_res
-            }
+        # 1. Base64 Unwrapping
+        unwrapped_text = self._try_decode_base64(text)
+        
+        # 2. Unicode / Homoglyph Normalization (Catches Cyrillic bypasses)
+        normalized_text = self._normalize_text(unwrapped_text)
+        
+        violations = []
+        redacted_text = normalized_text
 
-        # 2. Evaluate Causal Action Unit if agent is performing a tool call / DB write
-        if action:
-            session = self.get_or_create_session(session_id)
-            decision, updated_session = self.causal_engine.decide_core(action, session)
-            self.sessions[session_id] = updated_session
+        # A. Check JSON Structural Injections
+        if unwrapped_text.strip().startswith("{") and unwrapped_text.strip().endswith("}"):
+            try:
+                parsed = json.loads(unwrapped_text)
+                if isinstance(parsed, dict) and ("intent" in parsed or "payload" in parsed):
+                    violations.append("UNAUTHORIZED_STRUCTURED_JSON_INJECTION")
+            except Exception:
+                pass
 
-            if decision == Decision.BLOCK:
-                self.audit_logger.log_event(
-                    event_type="CAUSAL_MUTATION_BREACH_BLOCKED",
-                    details={
-                        "session_id": session_id,
-                        "target": action.target,
-                        "cumulative_mutations": session.cumulative_mutations
-                    }
-                )
-                return {
-                    "decision": "BLOCK",
-                    "reason": "WEIWEIN_CAUSAL_MUTATION_LIMIT_EXCEEDED",
-                    "scan_result": scan_res
-                }
+        # B. Check Restricted Narcotics / Controlled Substances
+        for pattern in self.restricted_substances:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("RESTRICTED_SUBSTANCE")
+                break
+
+        # C. Adversarial / System Override Check
+        for pattern in self.adversarial_patterns:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("ADVERSARIAL_PROMPT_INJECTION")
+                break
+
+        # D. Medical Harm & Chemical Hazards Check
+        for pattern in self.clinical_harm_patterns:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("CLINICAL_HARM_OR_HAZARD")
+                break
+
+        # E. Identity Mentions Check
+        for pattern in self.identity_mention_patterns:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("IDENTITY_CARD_MENTION")
+                break
+
+        # F. PHI Data Extraction Intent Check
+        for pattern in self.phi_extraction_patterns:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("UNAUTHORIZED_PHI_EXTRACTION_ATTEMPT")
+                break
+
+        # G. Direct PHI / Identity Number Leaks
+        for pattern in self.phi_patterns:
+            if re.search(pattern, redacted_text, re.IGNORECASE):
+                violations.append("PHI_LEAKAGE")
+                redacted_text = re.sub(pattern, "[REDACTED_PHI]", redacted_text, flags=re.IGNORECASE)
+
+        elapsed_us = (time.perf_counter() - start_t) * 1_000_000
+        safe = len(violations) == 0
 
         return {
-            "decision": "PASS",
-            "scan_result": scan_res
+            "safe": safe,
+            "latency_us": elapsed_us,
+            "redacted_text": redacted_text,
+            "violations": violations,
+            "within_sla": elapsed_us <= 200
         }
 
 
-if __name__ == "__main__":
-    print("=== TESTING HEALTHCARE CAUSAL GUARDRAIL ===")
-    
-    guard = HealthcareCausalGuardrail(max_mutations=1)
-    session_id = "patient_session_999"
+class HealthcareCausalGuardrail:
 
-    # Action 1: First database write (Allowed)
-    act1 = ActionUnit(call_id="call_01", intent="WRITE", target="ehr_db_patient_records", payload={"prescription": "Insulin 10 units"})
-    res1 = guard.inspect_request("Patient record update for MRN-948201.", session_id=session_id, action=act1)
-    print(f"\nRequest 1 Decision: {res1['decision']}")
+    def __init__(self, max_mutations: int = 1, audit_logger: Optional[AuditLogger] = None):
+        self.max_mutations = max_mutations
+        self.audit_logger = audit_logger or AuditLogger()
+        self.healthcare_scanner = HealthcareScanner()
+        self.mutation_count = 0
 
-    # Action 2: Second database write exceeding mutation limit (Blocked by Weiwen's Law)
-    act2 = ActionUnit(call_id="call_02", intent="WRITE", target="ehr_db_patient_records", payload={"prescription": "Morphine 50mg"})
-    res2 = guard.inspect_request("Another update for MRN-948201.", session_id=session_id, action=act2)
-    print(f"Request 2 Decision: {res2['decision']} (Reason: {res2.get('reason')})")
+    def inspect_request(self, text: str, session_id: str, action: Optional[ActionUnit] = None) -> Dict[str, Any]:
+        if action and (not action.call_id or not action.target or not action.intent):
+            details = {"reason": "FAIL_CLOSED_UNDETERMINED_STATE", "action": str(action)}
+            self.audit_logger.log_undetermined_state("Malformed action unit", details, {"session_id": session_id})
+            return {"decision": "BLOCK", "reason": "FAIL_CLOSED_UNDETERMINED_STATE"}
 
-    print(f"\nAudit Chain Verification: {guard.audit_logger.verify_chain()}")
+        if action and action.intent.upper() not in ["READ", "WRITE", "REVIEW"]:
+            self.audit_logger.log_event("INTENT_BYPASS_ATTEMPT", {"intent": action.intent}, {"session_id": session_id})
+            return {"decision": "BLOCK", "reason": "UNKNOWN_OR_MALICIOUS_INTENT"}
+
+        scan_res = self.healthcare_scanner.inspect_and_guard(text)
+
+        if not scan_res["safe"]:
+            self.audit_logger.log_event(
+                "GUARD_BLOCK", 
+                {"violations": scan_res["violations"], "text_snippet": text[:50]}, 
+                {"session_id": session_id}
+            )
+            return {
+                "decision": "BLOCK",
+                "reason": "ADVERSARIAL_OR_PHI_VIOLATION",
+                "details": scan_res
+            }
+
+        if action and action.intent.upper() == "WRITE":
+            if self.mutation_count >= self.max_mutations:
+                self.audit_logger.log_event("STATE_MUTATION_BLOCKED", {"reason": "Max mutations exceeded"}, {"session_id": session_id})
+                return {"decision": "BLOCK", "reason": "WEIWS_LAW_MUTATION_LIMIT_EXCEEDED"}
+            self.mutation_count += 1
+
+        self.audit_logger.log_event("GUARD_PASS", {"status": "ALLOWED"}, {"session_id": session_id})
+        return {"decision": "PASS", "scan_result": scan_res}

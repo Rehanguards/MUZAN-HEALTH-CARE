@@ -1,2 +1,5 @@
 __pycache__/
 healthcare_audit_logs/
+compare_benchmark.py/
+app.py/
+edge_stress_test.py/

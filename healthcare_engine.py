@@ -9,8 +9,9 @@ from redact import Redactor, Result
 
 class HealthcareGuardrailEngine:
     """Enterprise-grade Healthcare & PHI Guardrail Engine for Medical AI Agents.
+    
     Leverages Muzan's high-speed redactor and tamper-evident audit logging.
-    Designed for strict sub-200µs SLA enforcement and HIPAA compliance.
+    Hardened against clinical false-positives and engineered for strict sub-200µs SLA enforcement.
     """
 
     def __init__(
@@ -23,17 +24,20 @@ class HealthcareGuardrailEngine:
         self.audit_logger = audit_logger or AuditLogger(log_dir="./healthcare_audit_logs")
         self.redactor = redactor or Redactor(mode="mask")
 
-        # Additional high-precision clinical and dosage safety patterns
+        # Refined High-Precision Clinical Safety Patterns
         self.clinical_safety_patterns = {
             "HIGH_RISK_DOSAGE": re.compile(
-                r'\b(?:\d+\s*(?:mg|g|mcg|ml|tablets|capsules))\s*(?:daily|every\s+\d+\s+hours|overdose|per day|iv|po)\b',
+                r'\b\d+(?:\.\d+)?\s*(?:mg|g|mcg|ml|tablets|capsules)\b\s+(?:daily|every\s+\d+\s+hours|overdose|per day|iv|po|subcutaneously)\b',
                 re.IGNORECASE
             ),
             "RESTRICTED_SUBSTANCE": re.compile(
                 r'\b(?:fentanyl|morphine|oxycodone|methadone|adderall|xanax|diazepam)\b',
                 re.IGNORECASE
             ),
-            "ICD10_DIAGNOSTIC": re.compile(r'\b[A-Z][0-9]{2}(?:\.[0-9]{1,2})?\b'),
+            "ICD10_DIAGNOSTIC": re.compile(
+                r'\b(?:diag(?:nosis)?|code|icd)[-:\s]+([A-Z][0-9]{2}(?:\.[0-9]{1,2})?)\b',
+                re.IGNORECASE
+            ),
         }
 
     def inspect_and_guard(self, text: str, *args: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -74,11 +78,15 @@ class HealthcareGuardrailEngine:
             self.audit_logger.log_event(
                 event_type="HEALTHCARE_SAFETY_VIOLATION",
                 details={
-                    "violations": violations,
+                    "violations": list(set(violations)),
                     "session_id": session_id or "anonymous",
                     "latency_us": elapsed_us,
                 },
-                metadata={"sla_budget_ns": self.sla_budget_ns}
+                metadata={
+                    "sla_budget_ns": self.sla_budget_ns,
+                    "source_standard": "HIPAA-CLINICAL-V1",
+                    "clause_version": "2026.1"
+                }
             )
 
         return {
