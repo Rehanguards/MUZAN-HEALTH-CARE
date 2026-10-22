@@ -28,7 +28,10 @@ Audited under 1,000 concurrent adversarial requests against traditional model-ba
 | **Audit Verification** | **HMAC-SHA256 Validated** | Opaque / Standard Logs | **Integrity Intact** |
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/9b4b487d-974b-49f4-9e80-80e59ae2f579" width="600" alt="Muzan Healthcare Test Suite Benchmarks" />
+  <img src="https://github.com/user-attachments/assets/9d03a19c-b0b6-4168-8c93-c5857582003a" width="600" alt="Muzan Healthcare Test Suite Benchmarks" />
+</p>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/654d0cd0-865c-4564-8de1-87c1537ec82d" width="600" alt="Muzan vs ProtectAI Benchmark Comparison" />
 </p>
 
 ---
