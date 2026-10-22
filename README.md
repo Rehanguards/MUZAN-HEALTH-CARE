@@ -10,7 +10,6 @@ Designed from the ground up to eliminate LLM proxy latencies while providing mat
 
 * **Deterministic Sub-Millisecond Enforcement**: Operates completely in-process without network hops or secondary evaluator LLM calls, achieving **sub-200µs average latencies** under load.
 * **PHI & Diagnostic Redaction**: Real-time identification and structured masking of sensitive HIPAA-regulated Patient Health Information (PHI) and clinical diagnostic inputs.
-* **Causal State Boundary Control ($R \rightarrow S \rightarrow D \rightarrow H \rightarrow M$)**: Strict state-machine adjudication enforcing rigid system anchors and deterministic mutation boundaries to prevent unauthorized agent actions or state drift.
 * **Tamper-Evident HMAC Audit Chain**: Cryptographically secure, HMAC-SHA256 chained audit logs ensuring full auditability for healthcare compliance.
 * **Homoglyph & Obfuscation Resilience**: In-process NFKC normalization and zero-width character stripping to neutralize obfuscated prompt injections prior to evaluation.
 
