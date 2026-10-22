@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional
 class AuditLogger:
     """Muzan Tamper-evident audit logger using HMAC SHA-256 hash chaining.
     
-    Hardened with shared class-level locks, thread retry logic, and dynamic head synchronization.
+    Hardened with shared class-level locks, thread retry logic, dynamic head synchronization,
+    and Shaky-aligned Assurance Metadata (rule_id, authority_source, exit_taken).
     """
     _file_locks = {}
 
@@ -124,17 +125,52 @@ class AuditLogger:
 
             return current_hash
 
+    def log_decision(
+        self,
+        rule_id: str,
+        authority_source: str,
+        exit_taken: str,
+        verdict: str,
+        reason: str,
+        payload_summary: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Structural Fix (Shaky Item 3c): Logs explicit decision lineage for Assurance.
+        
+        Records:
+        - rule_id: Specific rule identifier triggered
+        - authority_source: Standard/Clause/Version backing the rule
+        - exit_taken: The exit route executed (PASS, BLOCK, ESCALATE, CONSERVATIVE_BLOCK)
+        """
+        details = {
+            "verdict": verdict,
+            "rule_id": rule_id,
+            "authority_source": authority_source,
+            "exit_taken": exit_taken,
+            "reason": reason,
+            "payload_summary": payload_summary,
+        }
+        return self.log_event(event_type="ADJUDICATION_DECISION", details=details, metadata=metadata)
+
     def log_undetermined_state(
         self, 
         reason: str, 
         raw_payload: Dict[str, Any], 
+        rule_id: str = "RULE_UNKNOWN_OR_UNMAPPED",
+        authority_source: str = "MUZAN_FAIL_CLOSED_SPEC_V1",
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
+        """Structural Fix (Shaky Item 2c & 3a): Logs undetermined/unknown states.
+        
+        Guarantees exit_taken is NEVER 'ALLOW' and records the authority source.
+        """
         details = {
             "status": "UNDETERMINED",
+            "rule_id": rule_id,
+            "authority_source": authority_source,
+            "exit_taken": "CONSERVATIVE_BLOCK",
             "reason": reason,
             "raw_payload": raw_payload,
-            "action_taken": "CONSERVATIVE_BLOCK"
         }
         return self.log_event(event_type="UNDETERMINED_FALLBACK", details=details, metadata=metadata)
 
