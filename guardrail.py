@@ -7,7 +7,16 @@ import time
 from typing import Any, Dict, List, Optional
 from audit import AuditLogger
 
+class IntentType:
+    READ = "READ"
+    WRITE = "WRITE"
+    REVIEW = "REVIEW"
 
+class Decision:
+    PASS = "PASS"
+    BLOCK = "BLOCK"
+    UNDETERMINED = "UNDETERMINED"
+    
 class ActionUnit:
     def __init__(self, call_id: str, intent: str, target: str, payload: Dict[str, Any]):
         self.call_id = call_id
@@ -68,25 +77,24 @@ class HealthcareScanner:
             {"pattern": re.compile(r"(?i)\b(export|dump|reveal)\b.*\b(patient|hipaa|phi|lab\s+reports?|database)\b"), "rule_id": "RULE_BULK_PHI_DUMP_ATTEMPT", "authority": "HIPAA_DATA_EXFIL_DEFENSE"}
         ]
 
-    
     def _normalize_text(self, text: str) -> str:
         if not text:
             return ""
-    # Strip all Zero-Width Space/Non-Joiner/BOM/Soft-Hyphen characters
+        # Strip all Zero-Width Space/Non-Joiner/BOM/Soft-Hyphen characters
         cleaned = re.sub(r"[\u200B-\u200D\uFEFF\u2060\u00AD]", "", text)
-    
-    # Cyrillic-to-Latin Homoglyph Translation Table
+        
+        # Cyrillic-to-Latin Homoglyph Translation Table
         trans_table = str.maketrans({
-        'а': 'a', 'А': 'A', 'с': 'c', 'С': 'C',
-        'е': 'e', 'Е': 'E', 'і': 'i', 'І': 'I',
-        'ј': 'j', 'Ј': 'J', 'р': 'p', 'Р': 'P',
-        'ѕ': 's', 'Ѕ': 'S', 'х': 'x', 'Х': 'X',
-        'у': 'y', 'У': 'Y', 'о': 'o', 'О': 'O',
-        'м': 'm', 'М': 'M', 'т': 't', 'Т': 'T',
-        'в': 'v', 'В': 'V', 'н': 'n', 'Н': 'N',
-        'к': 'k', 'К': 'K', 'л': 'l', 'Л': 'L',
-        'д': 'd', 'Д': 'D', 'п': 'p', 'П': 'P',
-        'и': 'i', 'И': 'I', 'г': 'g', 'Г': 'G'
+            'а': 'a', 'А': 'A', 'с': 'c', 'С': 'C',
+            'е': 'e', 'Е': 'E', 'і': 'i', 'І': 'I',
+            'ј': 'j', 'Ј': 'J', 'р': 'p', 'Р': 'P',
+            'ѕ': 's', 'Ѕ': 'S', 'х': 'x', 'Х': 'X',
+            'у': 'y', 'У': 'Y', 'о': 'o', 'О': 'O',
+            'м': 'm', 'М': 'M', 'т': 't', 'Т': 'T',
+            'в': 'v', 'В': 'V', 'н': 'n', 'Н': 'N',
+            'к': 'k', 'К': 'K', 'л': 'l', 'Л': 'L',
+            'д': 'd', 'Д': 'D', 'п': 'p', 'П': 'P',
+            'и': 'i', 'И': 'I', 'г': 'g', 'Г': 'G'
         })
         return cleaned.translate(trans_table)
     
@@ -115,13 +123,11 @@ class HealthcareScanner:
         triggered_rules = []
         redacted_text = normalized_text
 
-        # A. Check JSON Structural Injections
         # A. Check JSON Structural Injections & Malicious Embedded Commands
         if unwrapped_text.strip().startswith("{") and unwrapped_text.strip().endswith("}"):
             try:
                 parsed = json.loads(unwrapped_text)
                 if isinstance(parsed, dict):
-                    # Check keys or string values for malicious shell/SQL commands
                     payload_str = json.dumps(parsed).lower()
                     dangerous_keywords = ["rm -rf", "drop table", "exec(", "eval(", "system(", "sudo"]
                     
@@ -203,7 +209,7 @@ class HealthcareCausalGuardrail:
         self.mutation_count = 0
 
     def inspect_request(self, text: str, session_id: str, action: Optional[ActionUnit] = None) -> Dict[str, Any]:
-        # 1. Fail-Closed Check for Malformed Action Units
+        # 1. Fail-Closed Check for Malformed Action Units (Tri-State Fix: UNDETERMINED)
         if action and (not action.call_id or not action.target or not action.intent):
             details = {"reason": "FAIL_CLOSED_UNDETERMINED_STATE", "action": str(action)}
             self.audit_logger.log_undetermined_state(
@@ -213,9 +219,9 @@ class HealthcareCausalGuardrail:
                 authority_source="MUZAN_FAIL_CLOSED_SPEC_V1",
                 metadata={"session_id": session_id}
             )
-            return {"decision": "BLOCK", "reason": "FAIL_CLOSED_UNDETERMINED_STATE", "exit_taken": "CONSERVATIVE_BLOCK"}
+            return {"decision": "UNDETERMINED", "reason": "FAIL_CLOSED_UNDETERMINED_STATE", "exit_taken": "CONSERVATIVE_BLOCK"}
 
-        # 2. Strict Intent Enumeration & Validation
+        # 2. Strict Intent Enumeration & Validation (Tri-State Fix: UNDETERMINED)
         if action and action.intent.upper() not in ["READ", "WRITE", "REVIEW"]:
             self.audit_logger.log_decision(
                 rule_id="RULE_UNKNOWN_OR_MALICIOUS_INTENT",
@@ -226,7 +232,7 @@ class HealthcareCausalGuardrail:
                 payload_summary={"intent": action.intent},
                 metadata={"session_id": session_id}
             )
-            return {"decision": "BLOCK", "reason": "UNKNOWN_OR_MALICIOUS_INTENT", "exit_taken": "CONSERVATIVE_BLOCK"}
+            return {"decision": "UNDETERMINED", "reason": "UNKNOWN_OR_MALICIOUS_INTENT", "exit_taken": "CONSERVATIVE_BLOCK"}
 
         # 3. Scan Text via HealthcareScanner
         scan_res = self.healthcare_scanner.inspect_and_guard(text)
